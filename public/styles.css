@@ -34,3 +34,7 @@ table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;p
 .toast[hidden]{display:none}.actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
 .scroll{overflow-x:auto}
 .form label.chk{flex-direction:row;align-items:flex-start;color:var(--muted)}
+.opts{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}.opt{border:1px solid var(--line);border-radius:10px;padding:8px 12px;cursor:pointer;display:flex;gap:8px;align-items:center}
+.opt.sel{border-color:var(--accent);background:rgba(77,163,255,.08)}.opt input{margin:0}
+textarea{background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:9px 10px;font:inherit;width:100%;min-height:72px}
+.btn-sm{padding:4px 10px;font-size:13px}.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px}

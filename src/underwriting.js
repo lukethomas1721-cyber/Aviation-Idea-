@@ -10,10 +10,11 @@ export const REASONS = {
   thin_credit: 'Credit profile requires manual review.',
   revenue_ratio_high: 'The financed amount is too large relative to reported annual revenue.',
   revenue_ratio_review: 'Financed amount relative to revenue requires manual review.',
-  new_business: 'Limited time in business requires manual review.'
+  new_business: 'Limited time in business requires manual review.',
+  first_time_limit: 'The amount exceeds the starting limit for first-time clients and requires manual review.'
 };
 
-export function underwrite({ borrower, principalCents, existingExposureCents, priorDefaults, maxExposureCents }) {
+export function underwrite({ borrower, principalCents, existingExposureCents, priorDefaults, maxExposureCents, repaidLoans = 0, firstTimeMaxCents = Infinity }) {
   const declines = [];
   const reviews = [];
 
@@ -29,7 +30,9 @@ export function underwrite({ borrower, principalCents, existingExposureCents, pr
   if (ratio > 0.25) declines.push('revenue_ratio_high');
   else if (ratio > 0.1) reviews.push('revenue_ratio_review');
 
-  if (borrower.years_in_business < 1) reviews.push('new_business');
+  // Individuals have no business history; the years-in-business test only applies to entities.
+  if (borrower.entity_type !== 'individual' && borrower.years_in_business < 1) reviews.push('new_business');
+  if (repaidLoans === 0 && principalCents > firstTimeMaxCents) reviews.push('first_time_limit');
 
   let decision = 'approved';
   let reasons = [];

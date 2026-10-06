@@ -36,8 +36,8 @@ export const DEMO_PARTNER_KEY = 'demo_partner_key';
 
 export function seed(db, now = new Date()) {
   const stamp = now.toISOString();
-  db.prepare('INSERT INTO partners VALUES (?,?,?,?,?,1,?)')
-    .run('ptr_demo', 'Demo Charter Marketplace', hashKey(DEMO_PARTNER_KEY), CONFIG.feeBps, CONFIG.maxLoanCents, stamp);
+  db.prepare('INSERT INTO partners (id,name,api_key_hash,fee_adjust_bps,max_loan_cents,active,created_at) VALUES (?,?,?,?,?,1,?)')
+    .run('ptr_demo', 'Demo Charter Marketplace', hashKey(DEMO_PARTNER_KEY), 0, CONFIG.maxLoanCents, stamp);
 
   // Demo operators only. Real Part 135 certificates must be verified against FAA records before cert_verified=1.
   const ops = ['Demo Air Charter A', 'Demo Jet Services B', 'Demo Aviation C'].map((name, i) => {
@@ -47,7 +47,7 @@ export function seed(db, now = new Date()) {
   });
 
   const ins = db.prepare(`INSERT INTO legs (id,operator_id,origin_code,origin_city,dest_code,dest_city,duration_min,departs_at,
-    time_window,aircraft,seats,category,price_cents,per_seat,member_only,alt_aircraft) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    time_window,aircraft,seats,category,price_cents,operator_price_cents,markup_bps,per_seat,member_only,alt_aircraft) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   LEGS.forEach((l, i) => {
     const [o, oc, d, dc, min, win, ac, seats, cat, price, off, alt, f = {}] = l;
     const dep = new Date(now);
@@ -55,6 +55,6 @@ export function seed(db, now = new Date()) {
     const [h, m] = WINDOWS[win].split(':').map(Number);
     dep.setUTCHours(h, m, 0, 0);
     ins.run(newId('leg'), ops[i % ops.length], o, oc, d, dc, min, dep.toISOString(), win, ac, seats, cat,
-      price * 100, f.perSeat || 0, f.memberOnly || 0, alt);
+      price * 100, price * 100, 0, f.perSeat || 0, f.memberOnly || 0, alt);
   });
 }

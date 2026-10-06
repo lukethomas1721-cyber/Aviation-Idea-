@@ -1,7 +1,7 @@
 {
-  "name": "skyfinance",
+  "name": "jetreserve",
   "version": "0.1.0",
-  "description": "Buy-now-pay-later financing for Part 135 empty-leg charters (licensable to charter marketplaces)",
+  "description": "JetReserve: fly private now, pay weekly. Financing platform for Part 135 empty-leg charters",
   "type": "module",
   "private": true,
   "engines": { "node": ">=22.13" },

@@ -17,7 +17,7 @@ if (!process.env.ADMIN_API_KEY) console.warn('! ADMIN_API_KEY not set; using ins
 
 const app = createApp({ db, adminKey });
 createServer(app).listen(CONFIG.port, () => {
-  console.log(`SkyFinance listening on http://localhost:${CONFIG.port}`);
+  console.log(`JetReserve listening on http://localhost:${CONFIG.port}`);
   console.log(`Demo partner key: ${DEMO_PARTNER_KEY}`);
 });
 

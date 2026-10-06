@@ -3,15 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SkyFinance — Empty Leg Financing</title>
+<title>JetReserve — Fly Now, Pay Weekly</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 20 20%27%3E%3Ctext y=%2715%27 font-size=%2715%27%3E✈%3C/text%3E%3C/svg%3E">
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
 <header>
-  <div class="brand">✈ Sky<b>Finance</b></div>
+  <div class="brand">✈ Jet<b>Reserve</b></div>
   <nav id="tabs">
     <button data-tab="market" class="active">Empty Legs</button>
+    <button data-tab="member">Membership</button>
     <button data-tab="loans">My Financing</button>
     <button data-tab="lender">Lender Portal</button>
   </nav>
@@ -23,8 +24,17 @@
       <label class="chk"><input type="checkbox" id="finOnly"> Financeable only</label>
       <input id="routeFilter" placeholder="Filter by airport / city (e.g. LAS)">
     </div>
-    <p class="muted">Part 135 empty legs. Up to $30,000 financed per trip — 10% flat charge, repaid in 3 monthly installments.</p>
+    <div class="row"><input id="meEmail" type="email" placeholder="Your email (optional: applies your membership pricing)"><button class="ghost" id="meBtn" type="button">Apply</button></div>
+    <p class="muted">Part 135 empty legs. 10% down, then weekly autopay over 3, 5 or 12 months. The operator is paid in full once your down payment and first autopay clear.</p>
     <div id="legs" class="grid"></div>
+  </section>
+
+  <section id="member" hidden>
+    <h1>Membership &amp; deposits</h1>
+    <p class="muted">Members get lower flat charges and trip credit (held in a segregated trust account). Deposit holders get a credit line equal to their deposit.</p>
+    <form id="memberForm" class="row"><input id="memberEmail" type="email" placeholder="Your email" required><button class="ghost" data-act="view" type="submit">Look up</button></form>
+    <div id="memberBody"></div>
+    <div id="plans" class="grid"></div>
   </section>
 
   <section id="loans" hidden>

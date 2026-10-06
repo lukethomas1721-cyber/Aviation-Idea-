@@ -1,65 +1,90 @@
-# SkyFinance — buy-now-pay-later for Part 135 empty-leg charters
+# JetReserve — fly private now, pay weekly
 
-Lending platform that finances charter flights (empty legs first) for corporate customers, built to be
-**licensed to Part 135 charter marketplaces** as their embedded financing provider.
-
-**Terms (all configurable in `src/config.js`):** up to **$30,000 financed per trip**, **10% flat financing charge**,
-**3 equal monthly installments** (max 3-month term). Trips over $30k require a down payment for the excess.
-The operator is paid the financed principal at funding; the customer repays SkyFinance.
+Code for the [JetReserve business plan](#plan-to-code-map): financing for Part 135 empty-leg charters with weekly autopay,
+member plans, deposit credit lines, group pay, and a plug-in API for charter companies (Plan A) or JetReserve's own
+marketplace (Plan B). Zero dependencies, Node >= 22.13.
 
 ```
-npm start         # http://localhost:3000  (Node >= 22.13, zero dependencies, in-memory DB by default)
-npm test          # 26 tests: money math, underwriting rules, loan lifecycle, HTTP/auth
-DB_PATH=data/sky.db ADMIN_API_KEY=... CAPITAL_POOL_CENTS=200000000 npm start
+npm start         # http://localhost:3000   (in-memory DB; set DB_PATH=data/jr.db to persist, delete it after schema changes)
+npm test          # 60 tests
+ADMIN_API_KEY=... CAPITAL_POOL_CENTS=50000000 MAX_LOAN_CENTS=4000000 ENFORCE_APR_CAP=1 npm start
 ```
 
-The UI at `/` has three tabs: **Empty Legs** (marketplace with "Finance this trip" checkout), **My Financing**
-(repayment view) and **Lender Portal** (portfolio, manual review queue; dev admin key `dev_admin_key`).
-Seed data is the 18 empty legs you provided; the two per-seat "members only" flights are shown but not financeable.
-The truncated final LAX→UAO listing had no price/date, so it was not seeded.
+UI tabs: **Empty Legs** (checkout with plan/term choice, group pay, sign, pay), **Membership** (Access/Elite/deposit),
+**My Financing**, **Lender Portal** (admin key `dev_admin_key` in dev). Payment buttons in the demo simulate processor
+confirmations; no money moves.
 
-## Loan flow
+## Money flow (the plan's safeguards, enforced in code)
 
-`quote → application (underwriting) → approved | pending_review | declined → accept (e-sign) → funded → paid | defaulted`
+`quote → application/underwriting → approved → [group] → sign (flight LOCKS) → down payment + first autopay clear → operator paid in full → weekly autopay`
 
-- Approval **holds the leg** for 30 minutes (2 h in manual review) so it can't be double-booked; holds expire automatically.
-- Funding creates the schedule (due every 30 days), records the operator payout via the rails adapter.
-- Payments apply oldest-installment-first, are idempotent (`idempotencyKey`), and reject overpayment.
-- Daily `sweep` expires stale offers and marks loans defaulted at >30 days past due (cures back to `funded` if brought current).
-- Controls: capital-pool cap, per-borrower exposure cap ($60k), min/max lead time before departure, verified-operator check.
+- **Approval holds the flight** (30 min; 2 h in review; 2 h for group invites). **Signing locks it** so it can't be sold twice.
+- **The operator is paid only after the down payment AND the first autopay clear** (`tryFund`). If they don't clear within
+  60 minutes the booking is unwound: flight released, credit released, collected money refunded.
+- Signing requires autopay plus a **backup card**. First payment is charged at signing; the rest weekly.
+- Idempotent payments, no overpayment, per-client exposure cap ($60k), low **first-time limit** ($15k, manual review above it until a loan is repaid), capital-pool cap.
+- **Missed payment:** 3-day grace, then member perks freeze (non-member pricing) until cured; 30+ days late = defaulted.
 
-## API (`/api/v1`, partner key in `x-api-key`; admin routes use `x-admin-key`)
+## Pricing (`src/plans.js`)
 
-| | |
+| Plan | Down | Flat charge | Terms | Notes |
+|---|---|---|---|---|
+| Non-member | 10% | 25% | 3 mo (13 wks) | |
+| Access | 10% | 15% | 3 or 5 mo (13/22 wks) | $1,000/mo billed $6,000 per 6 mo; $2,500 trip credit per payment |
+| Elite | 10% | 10% | 3 or 5 mo | $3,000/mo billed $9,000 per 3 mo; $5,000 trip credit per payment |
+| Deposit holder | none | 5% | 12 mo (52 wks) | credit line = deposit ($50k/100k/150k/200k/500k) |
+| Marketplace (Plan B) | 10% | 10% | 3 mo | listing = operator rate + 15% markup |
+
+Flat charge = % of the **amount financed**. Member **trip credit** counts toward the down payment first, then reduces the
+amount financed; it sits in a **segregated trust ledger** with monthly-reconciliation endpoint (`GET /admin/trust?bankBalanceCents=`).
+Plan B: the operator is paid its own rate; JetReserve keeps the markup plus the charge (the plan's $8,000 → $9,200 → $2,028 example is a test).
+
+Deposit open questions are config: `depositRefills` (credit line refills as repaid; default **true**); the deposit is held in
+trust as collateral, not drawn down. Refund terms are not implemented.
+
+## Group pay (`src/services/group.js`)
+
+Main customer signs and owns the whole balance; up to 8 friends. **Invite → Join** (ID verified + own autopay) **→ Lock**
+(`shrink`: absent friends dropped and shares recalculated, or `main_covers`) **→ Collect** (each person pays their equal
+share of the down payment and every weekly payment; the main customer absorbs rounding). The trip books only when every
+share of the down payment and first payment has cleared. **Backstop:** a friend's missed share is charged to the main
+customer's card after the grace period (daily `sweep`). Friends can pay off early; the main customer can buy one out. The plan's
+$9,000 / 9-person / $100 down / $86.54 weekly example is a test.
+
+## API (`/api/v1`; partner key `x-api-key`, admin `x-admin-key`)
+
+`GET /plans` · `GET /legs?email=` · `POST /quotes` · `POST /applications` · `GET /loans[/:id]` · `POST /loans/:id/accept|cancel|payments`
+· `POST /loans/:id/group` · `POST /loans/:id/group/finalize` · `POST /group/join/:token` · `POST /loans/:id/group/members/:mid/payoff`
+· `POST /members/join|renew|deposit` · `GET /members/:email`
+· admin: `portfolio`, `loans`, `loans/:id/review`, `sweep`, `legs` (Plan B upload), `trust`.
+
+Licensing (Plan A): each charter company is a `partners` row with its own hashed key, `max_loan_cents`, and `fee_adjust_bps`; loans are partner-scoped.
+
+## Plan-to-code map
+
+| Plan section | Status |
 |---|---|
-| `GET /legs?financeable=1` | listings with financing eligibility + monthly payment preview |
-| `POST /quotes` `{legId, downPaymentCents?}` | terms, APR, schedule |
-| `POST /applications` `{legId, borrower{...}, consents:{creditCheck:true}}` | underwriting decision + offer |
-| `POST /loans/:id/accept` `{acceptedTerms:true, signatureName}` | fund + book |
-| `POST /loans/:id/cancel` · `GET /loans/:id` · `GET /loans?email=` | |
-| `POST /loans/:id/payments` `{amountCents, idempotencyKey}` | record repayment |
-| `GET /admin/portfolio` · `GET /admin/loans` · `POST /admin/loans/:id/review` · `POST /admin/sweep` | lender back office |
+| How it works, pricing, unit economics | **Built** (plans, weekly schedules, payout ordering) |
+| Memberships, trip credit, trust account | **Built** (ledger + reconciliation); real bank account/CPA attestation are operational |
+| Deposit credit line | **Built** (refill config; refund terms open) |
+| Group pay | **Built** |
+| Plan B marketplace | **Built** (admin upload API + pricing); no operator-facing upload UI yet |
+| Protecting repayment (first-time limits, exposure cap, grace, perk freeze, backstop) | **Built**, except: capped **late fee** (config stub, off), **credit-bureau reporting** and **collections** hand-off |
+| Affirm/Uplift/ChargeAfter referral for borderline/over-cap loans | Not built |
+| ID/credit/income verification | **Stubbed** (self-reported inputs); needs real KYC + bureau providers |
+| Payments / ACH autopay / operator payouts | **Mocked** (`src/rails.js` adapter) |
+| Plan C investment fund | **Not software**: a securities structure (Reg D etc.) for counsel. Code tracks a capital pool only |
+| DOT broker registration, operator contracts, loan agreement text, insurance/bond, patent | Legal/operational, not code |
 
-## Licensing model
+## Read before launch
 
-Each licensee is a row in `partners` with its own hashed API key, `fee_bps` and `max_loan_cents` (can only tighten the
-platform cap). All loans are partner-scoped. Natural next steps: per-partner webhooks, revenue share, white-label widget,
-partner onboarding endpoint.
-
-## Not production-ready yet — replace before real money moves
-
-- **Underwriting inputs are self-reported.** `underwriting.js` is a pure scorecard; wire `creditScore`, KYC/KYB and OFAC to real providers (business bureau, Persona/Middesk, etc.).
-- **`rails.js` is a mock.** Implement ACH/wire disbursement to operators and ACH/card collection from borrowers, with a ledger.
-- **Auth:** the browser demo embeds a demo partner key. Real partners call from their backend; add borrower login for "My Financing".
-- **Operator verification:** `cert_verified` must be backed by an actual FAA Part 135 certificate check.
-- **Cancellations/refunds after funding**, charter no-shows, and operator payout reversals are not modeled.
-- Postgres + migrations instead of SQLite, rate limiting, audit exports, PII encryption.
-
-## Legal — needs counsel before launch
-
-- A 10% flat charge over 3 monthly payments is **≈59% APR** (computed and shown to the borrower). Business-purpose
-  credit avoids many consumer rules (TILA/Reg Z), but **state usury limits, lender licensing, and commercial-financing
-  disclosure laws (e.g. CA, NY, and others require APR-style disclosures)** still apply, and rules differ by state and by
-  borrower type (sole proprietors are often treated differently). Fee, term, and disclosure text are all configurable.
-- Decline responses return reason codes for adverse-action notices (ECOA/FCRA); the notice itself is not generated.
-- Late fees are intentionally off (`lateFeeCents: 0`) pending legal sign-off.
+- **APR.** Computed actuarially with the first payment at signing: ≈207% (Non-member 3 mo), ≈85% (Elite 3 mo), ≈72% (Access 5 mo),
+  ≈48% (Elite 5 mo), ≈10% (deposit). These are **higher than the 174% / 72% / 44% / 9.7% in the plan**, which uses a different
+  convention. Have counsel confirm the Reg Z method. The plan itself says pricing exceeds Texas consumer limits; quotes show the
+  APR and a review flag, and `ENFORCE_APR_CAP=1` refuses consumer-track loans above the 18% reference cap (business-purpose
+  clients are not capped here; confirm that track with counsel).
+- **$30,000 cap.** The plan's $40k examples need `MAX_LOAN_CENTS=4000000`+ (default stays at your original $30k per trip;
+  the excess becomes extra down payment).
+- **Self-reported credit/income** and mock payments mean this must not take real money yet.
+- Demo operators are fake; `cert_verified` must be backed by a real FAA Part 135 check.
+- Not modeled: cancellation/refund after funding, operator payout reversals, operator login.

@@ -1,49 +1,68 @@
 import { CONFIG } from './config.js';
+import { PLANS, WEEKS } from './plans.js';
 import { apr, addDays, dateOnly, feeFor, splitEven } from './money.js';
 import { bad } from './errors.js';
 
+// First installment is due (autopay-charged) at signing, then weekly.
 export function scheduleFor({ principalCents, feeCents, installments, intervalDays, startDate }) {
   const totals = splitEven(principalCents + feeCents, installments);
   const fees = splitEven(feeCents, installments);
   return totals.map((amount, i) => ({
     seq: i + 1,
-    dueDate: addDays(startDate, intervalDays * (i + 1)),
+    dueDate: addDays(startDate, intervalDays * i),
     amountCents: amount,
     feeCents: fees[i],
     principalCents: amount - fees[i]
   }));
 }
 
-// Financing terms for a charter price. Anything above the per-trip cap must be covered by a down payment.
-export function buildTerms({ priceCents, downPaymentCents = 0, partner, now, config = CONFIG }) {
-  const cap = Math.min(partner.max_loan_cents, config.maxLoanCents);
-  if (!Number.isInteger(downPaymentCents) || downPaymentCents < 0) throw bad('invalid_down_payment', 'downPaymentCents must be a non-negative integer');
-  const requiredDown = Math.max(0, priceCents - cap);
-  const down = Math.max(downPaymentCents, requiredDown);
-  const principal = priceCents - down;
-  if (principal < config.minLoanCents) {
-    throw bad('below_minimum', `Financed amount must be at least ${config.minLoanCents / 100} USD`);
+/**
+ * Terms for one flight under one plan.
+ *  priceCents          customer-facing price (operator rate + any marketplace markup)
+ *  operatorPriceCents  what the operator is paid in full at funding
+ *  creditCents         member trip credit available; counts toward the down payment first, then reduces the amount financed
+ */
+export function buildTerms({ priceCents, operatorPriceCents = priceCents, plan, termMonths, creditCents = 0, partner, now, config = CONFIG }) {
+  if (typeof plan === 'string') plan = PLANS[plan];
+  if (!plan) throw bad('unknown_plan', 'Unknown plan');
+  termMonths = termMonths ?? plan.termsMonths[0];
+  if (!plan.termsMonths.includes(termMonths)) {
+    throw bad('invalid_term', `${plan.name} offers terms of ${plan.termsMonths.join(' or ')} months`, { allowed: plan.termsMonths });
   }
-  const fee = feeFor(principal, partner.fee_bps);
-  const schedule = scheduleFor({
-    principalCents: principal, feeCents: fee, installments: config.installments,
-    intervalDays: config.intervalDays, startDate: dateOnly(now)
-  });
+  const cap = Math.min(partner.max_loan_cents, config.maxLoanCents);
+  const downBase = Math.round((priceCents * plan.downBps) / 10000);
+  const creditToDown = Math.min(creditCents, downBase);
+  const creditToPrincipal = Math.max(0, Math.min(creditCents - creditToDown, priceCents - downBase - config.minLoanCents));
+  let principal = priceCents - downBase - creditToPrincipal;
+  const extraDown = Math.max(0, principal - cap); // anything over the per-trip cap must be paid up front
+  principal -= extraDown;
+  if (principal < config.minLoanCents) throw bad('below_minimum', `Financed amount must be at least ${config.minLoanCents / 100} USD`);
+
+  const flatBps = plan.flatBps + (partner.fee_adjust_bps || 0);
+  const fee = feeFor(principal, flatBps);
+  const installments = WEEKS[termMonths];
+  const schedule = scheduleFor({ principalCents: principal, feeCents: fee, installments, intervalDays: config.intervalDays, startDate: dateOnly(now) });
   return {
+    plan: { id: plan.id, name: plan.name },
+    termMonths,
     charterPriceCents: priceCents,
-    downPaymentCents: down,
-    downPaymentRequired: requiredDown > 0,
+    payoutCents: operatorPriceCents,
+    downPaymentCents: downBase + extraDown,
+    downPaymentRequired: downBase + extraDown > 0,
+    creditAppliedCents: creditToDown + creditToPrincipal,
+    cashDownCents: downBase - creditToDown + extraDown,
     principalCents: principal,
-    feeBps: partner.fee_bps,
+    flatBps,
     feeCents: fee,
     totalRepaymentCents: principal + fee,
-    installments: config.installments,
+    installments,
     intervalDays: config.intervalDays,
-    apr: apr(principal, schedule.map((s) => s.amountCents)),
+    weeklyPaymentCents: schedule[0].amountCents,
+    apr: apr(principal, schedule.map((s) => s.amountCents), 52, 0),
     schedule
   };
 }
 
 export const DISCLOSURE =
-  'Flat financing charge on the amount financed, repaid in equal monthly installments. The charge is fixed and is not reduced ' +
-  'by early repayment. The APR shown is an estimate for comparison purposes. Business-purpose credit only.';
+  'Flat financing charge on the amount financed, repaid by weekly autopay. The first payment is charged at signing. ' +
+  'The charge is fixed and is not reduced by early repayment. The APR shown is an estimate for comparison purposes.';

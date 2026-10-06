@@ -5,6 +5,10 @@ import { ApiError } from './errors.js';
 import { hashKey } from './seed.js';
 import { mockRails } from './rails.js';
 import * as svc from './services/loans.js';
+import * as members from './services/members.js';
+import * as group from './services/group.js';
+import { PLANS } from './plans.js';
+import { ApiError as AE } from './errors.js';
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
 const PUBLIC_DIR = resolve(new URL('../public', import.meta.url).pathname);
@@ -22,8 +26,9 @@ export function createApp({ db, now = () => new Date(), rails = mockRails, admin
 
   // public
   route('GET', '/api/v1/health', null, () => ({ ok: true }));
-  route('GET', '/api/v1/legs', 'partner', (c) => ({ legs: svc.listLegs(c.db, c.partner, c.now, { origin: c.query.get('origin'), dest: c.query.get('dest'), financeableOnly: c.query.get('financeable') === '1' }) }));
-  // partner (the licensed charter site, server-to-server)
+  route('GET', '/api/v1/plans', null, () => ({ plans: Object.values(PLANS) }));
+  // partner (the charter site / marketplace, server-to-server)
+  route('GET', '/api/v1/legs', 'partner', (c) => ({ legs: svc.listLegs(c.db, c.partner, c.now, { origin: c.query.get('origin'), dest: c.query.get('dest'), financeableOnly: c.query.get('financeable') === '1', email: c.query.get('email') }) }));
   route('POST', '/api/v1/quotes', 'partner', (c) => svc.createQuote(c, c.body));
   route('POST', '/api/v1/applications', 'partner', (c) => ({ status: 201, body: svc.applyForLoan(c, c.body) }));
   route('GET', '/api/v1/loans', 'partner', (c) => ({ loans: svc.listLoans(c, { email: c.query.get('email'), status: c.query.get('status') }) }));
@@ -31,16 +36,28 @@ export function createApp({ db, now = () => new Date(), rails = mockRails, admin
   route('POST', '/api/v1/loans/:id/accept', 'partner', (c) => svc.acceptLoan(c, c.params.id, c.body));
   route('POST', '/api/v1/loans/:id/cancel', 'partner', (c) => svc.cancelLoan(c, c.params.id));
   route('POST', '/api/v1/loans/:id/payments', 'partner', (c) => svc.recordPayment(c, c.params.id, c.body));
+  // group pay
+  route('POST', '/api/v1/loans/:id/group', 'partner', (c) => ({ status: 201, body: group.createGroup(c, c.params.id, c.body) }));
+  route('POST', '/api/v1/loans/:id/group/finalize', 'partner', (c) => group.finalizeGroup(c, c.params.id, c.body));
+  route('POST', '/api/v1/group/join/:token', 'partner', (c) => group.joinGroup(c, c.params.token, c.body));
+  route('POST', '/api/v1/loans/:id/group/members/:mid/payoff', 'partner', (c) => { group.payoffMember(c, c.params.id, c.params.mid, c.body); return svc.getLoan(c, c.params.id); });
+  // members (Access / Elite memberships, deposit holders)
+  route('POST', '/api/v1/members/join', 'partner', (c) => ({ status: 201, body: members.joinMembership(c, c.body) }));
+  route('POST', '/api/v1/members/renew', 'partner', (c) => members.renewMembership(c, c.body));
+  route('POST', '/api/v1/members/deposit', 'partner', (c) => ({ status: 201, body: members.depositFunds(c, c.body) }));
+  route('GET', '/api/v1/members/:email', 'partner', (c) => members.memberView(c, decodeURIComponent(c.params.email)));
   // lender back office
   route('GET', '/api/v1/admin/portfolio', 'admin', (c) => svc.portfolio(c));
   route('GET', '/api/v1/admin/loans', 'admin', (c) => ({ loans: svc.listLoans(c, { status: c.query.get('status'), email: c.query.get('email'), admin: true }) }));
   route('POST', '/api/v1/admin/loans/:id/review', 'admin', (c) => svc.reviewLoan(c, c.params.id, c.body));
   route('POST', '/api/v1/admin/loans/:id/payments', 'admin', (c) => {
     const loan = db.prepare('SELECT partner_id FROM loans WHERE id=?').get(c.params.id);
-    if (!loan) throw new ApiError(404, 'loan_not_found', 'Loan not found');
+    if (!loan) throw new AE(404, 'loan_not_found', 'Loan not found');
     return svc.recordPayment({ ...c, partner: { id: loan.partner_id } }, c.params.id, c.body);
   });
   route('POST', '/api/v1/admin/sweep', 'admin', (c) => svc.sweep(c));
+  route('POST', '/api/v1/admin/legs', 'admin', (c) => ({ status: 201, body: svc.createMarketplaceLeg(c, c.body) }));
+  route('GET', '/api/v1/admin/trust', 'admin', (c) => members.trustReconciliation(c, c.query.get('bankBalanceCents') === null ? undefined : Number(c.query.get('bankBalanceCents'))));
 
   function authPartner(req) {
     const key = req.headers['x-api-key'];
