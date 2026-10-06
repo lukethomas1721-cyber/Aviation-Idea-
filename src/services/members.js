@@ -119,7 +119,8 @@ export function trustReconciliation(ctx, bankBalanceCents) {
   const total = rows.reduce((s, r) => s + r.balance, 0);
   const negative = rows.filter((r) => r.balance < 0);
   return {
-    ledgerTotalCents: total, clientBalances: rows.map((r) => ({ email: r.email, balanceCents: r.balance })),
+    ledgerTotalCents: total, suretyBondRequiredCents: total, // plan: bond sized to client balances
+    clientBalances: rows.map((r) => ({ email: r.email, balanceCents: r.balance })),
     bankBalanceCents: bankBalanceCents ?? null,
     differenceCents: bankBalanceCents == null ? null : bankBalanceCents - total,
     reconciled: bankBalanceCents == null ? null : bankBalanceCents === total && negative.length === 0,

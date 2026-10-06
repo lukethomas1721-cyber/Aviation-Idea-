@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { underwrite } from '../src/underwriting.js';
 
-const base = { annual_revenue_cents: 10_000_000_00, years_in_business: 5, credit_score: 750, kyc_passed: 1, ofac_clear: 1, entity_type: 'llc' };
-const run = (b = {}, o = {}) => underwrite({ borrower: { ...base, ...b }, principalCents: 3_000_000, existingExposureCents: 0, priorDefaults: 0, maxExposureCents: 6_000_000, repaidLoans: 1, ...o });
+const base = { annual_revenue_cents: 10_000_000_00, years_in_business: 5, credit_score: 750, kyc_passed: 1, ofac_clear: 1, entity_type: 'llc', state: 'TX' };
+const run = (b = {}, o = {}) => underwrite({ borrower: { ...base, ...b }, principalCents: 3_000_000, existingExposureCents: 0, priorDefaults: 0, maxExposureCents: 6_000_000, repaidLoans: 1, launchStates: ['TX'], ...o });
 
 test('strong borrower approved tier A', () => { const r = run(); assert.equal(r.decision, 'approved'); assert.equal(r.riskTier, 'A'); });
 test('failed KYC / OFAC decline', () => {
@@ -31,4 +31,12 @@ test('first-time clients have a low starting limit', () => {
   assert.equal(r.decision, 'review');
   assert.equal(r.reasons[0].code, 'first_time_limit');
   assert.equal(run({}, { repaidLoans: 1, firstTimeMaxCents: 1_500_000 }).decision, 'approved');
+});
+
+test('launch phase: only clients in launch states (Texas) are served', () => {
+  const r = run({ state: 'CA' });
+  assert.equal(r.decision, 'declined');
+  assert.equal(r.reasons[0].code, 'state_not_available');
+  assert.equal(run({ state: 'CA' }, { launchStates: ['TX', 'CA'] }).decision, 'approved');
+  assert.equal(run({ state: 'CA' }, { launchStates: null }).decision, 'approved'); // no restriction configured
 });

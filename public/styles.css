@@ -38,3 +38,6 @@ table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;p
 .opt.sel{border-color:var(--accent);background:rgba(77,163,255,.08)}.opt input{margin:0}
 textarea{background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:9px 10px;font:inherit;width:100%;min-height:72px}
 .btn-sm{padding:4px 10px;font-size:13px}.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+.bad-text{color:var(--bad)}
+.modal.embedded{position:static;background:none;padding:0;min-height:100vh;display:block}.modal.embedded .sheet{width:100%;border:0;border-radius:0;min-height:100vh;margin:0}
+.partner-site{font-family:Georgia,serif;--accent:#8a6d3b}

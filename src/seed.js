@@ -33,16 +33,18 @@ const LEGS = [
 ];
 
 export const DEMO_PARTNER_KEY = 'demo_partner_key';
+export const demoOperatorKey = (i) => `demo_operator_key_${i}`; // i = 1..3
 
 export function seed(db, now = new Date()) {
   const stamp = now.toISOString();
-  db.prepare('INSERT INTO partners (id,name,api_key_hash,fee_adjust_bps,max_loan_cents,active,created_at) VALUES (?,?,?,?,?,1,?)')
-    .run('ptr_demo', 'Demo Charter Marketplace', hashKey(DEMO_PARTNER_KEY), 0, CONFIG.maxLoanCents, stamp);
+  db.prepare('INSERT INTO partners (id,name,api_key_hash,fee_adjust_bps,max_loan_cents,active,allowed_origins,created_at) VALUES (?,?,?,?,?,1,?,?)')
+    .run('ptr_demo', 'Demo Charter Marketplace', hashKey(DEMO_PARTNER_KEY), 0, CONFIG.maxLoanCents, 'http://localhost:3000,http://127.0.0.1:3000', stamp);
 
   // Demo operators only. Real Part 135 certificates must be verified against FAA records before cert_verified=1.
   const ops = ['Demo Air Charter A', 'Demo Jet Services B', 'Demo Aviation C'].map((name, i) => {
     const id = `op_demo${i + 1}`;
-    db.prepare('INSERT INTO operators VALUES (?,?,?,1,1)').run(id, name, `DEMO-135-00${i + 1}`);
+    db.prepare('INSERT INTO operators (id,name,part135_cert,cert_verified,active,commission_bps,api_key_hash) VALUES (?,?,?,1,1,?,?)')
+      .run(id, name, `DEMO-135-00${i + 1}`, CONFIG.operatorCommissionBps, hashKey(demoOperatorKey(i + 1)));
     return id;
   });
 
@@ -55,6 +57,6 @@ export function seed(db, now = new Date()) {
     const [h, m] = WINDOWS[win].split(':').map(Number);
     dep.setUTCHours(h, m, 0, 0);
     ins.run(newId('leg'), ops[i % ops.length], o, oc, d, dc, min, dep.toISOString(), win, ac, seats, cat,
-      price * 100, price * 100, 0, f.perSeat || 0, f.memberOnly || 0, alt);
+      price * 100, Math.round(price * 100 * (1 - CONFIG.operatorCommissionBps / 10000)), 0, f.perSeat || 0, f.memberOnly || 0, alt);
   });
 }

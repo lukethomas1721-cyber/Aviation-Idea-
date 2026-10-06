@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { setup, goodBorrower, person, firstLeg, legAt, consents, sign, key, fundLoan, DAY } from './helpers.js';
+import { setup, goodBorrower, person, firstLeg, legAt, consents, sign, key, fundLoan, DAY, T0 } from './helpers.js';
 import * as svc from '../src/services/loans.js';
 
 const status = (db, legId) => db.prepare('SELECT status FROM legs WHERE id=?').get(legId).status;
@@ -164,7 +164,7 @@ test('unpaid weekly installments > 30 days late default via sweep, and cure when
 test('capital pool limit stops new originations', () => {
   const { ctx, db } = setup();
   const legs = svc.listLegs(db, ctx().partner, ctx().now, { financeableOnly: true });
-  db.prepare("INSERT INTO borrowers VALUES ('b0','X','llc','x@x.test',1,1,700,1,1,'t')").run();
+  db.prepare("INSERT INTO borrowers (id,legal_name,entity_type,email,annual_revenue_cents,years_in_business,credit_score,kyc_passed,ofac_clear,created_at) VALUES ('b0','X','llc','x@x.test',1,1,700,1,1,'t')").run();
   db.prepare(`INSERT INTO loans (id,partner_id,leg_id,borrower_id,status,plan_id,term_months,charter_price_cents,payout_cents,down_payment_cents,credit_applied_cents,cash_down_cents,
     principal_cents,fee_bps,fee_cents,total_cents,apr,installments,interval_days,decision,decision_reasons,created_at)
     VALUES ('l0','ptr_demo',?, 'b0','funded','non_member',3,1,1,0,0,0,199900000,2500,1,1,0,13,7,'approved','[]','t')`).run(legs[0].id);
@@ -176,6 +176,7 @@ test('consent and borrower validation', () => {
   const leg = firstLeg(db);
   assert.throws(() => svc.applyForLoan(ctx(), { legId: leg.id, borrower: goodBorrower(), consents: {} }), /consents/);
   assert.throws(() => svc.applyForLoan(ctx(), { legId: leg.id, borrower: goodBorrower({ email: 'nope' }), consents }), /email/);
+  assert.throws(() => svc.applyForLoan(ctx(), { legId: leg.id, borrower: goodBorrower({ state: undefined }), consents }), /state/);
 });
 
 test('ENFORCE_APR_CAP style enforcement refuses consumer loans above the reference cap', async () => {
@@ -205,4 +206,61 @@ test('Plan B: marketplace listing adds 15% to the operator rate; operator gets i
   svc.recordPayment(ctx(), loan.id, { idempotencyKey: key() });
   assert.equal(calls.disburse[0].amountCents, 800_000);
   assert.equal(svc.portfolio(ctx()).marketplaceMarkupCents, 120_000);
+});
+
+test('term rules: terms shift with hours to departure and leg type', async () => {
+  const { CONFIG } = await import('../src/config.js');
+  const { ctx, db } = setup();
+  const leg = legAt(db, 575_300); // departs ~22h out in the fixture
+  const base = svc.createQuote(ctx(), { legId: leg.id });
+  assert.equal(base.terms.downPaymentCents, 57_530);
+  CONFIG.termRules = [{ legType: 'empty_leg', maxHours: 48, downBpsAdd: 1000 }, { maxHours: 72, flatBpsAdd: 500 }];
+  try {
+    const q = svc.createQuote(ctx(), { legId: leg.id });
+    assert.equal(q.terms.downPaymentCents, 115_060);                 // 20% instead of 10%
+    assert.equal(q.terms.flatBps, 3000);                              // 25% + 5%
+    assert.deepEqual(q.terms.termRulesApplied, [0, 1]);
+    CONFIG.termRules = [{ maxHours: 72, maxTermMonths: 3 }];
+    const m = await import('../src/services/members.js');
+    m.joinMembership(ctx(), { email: 'e@x.test', planId: 'elite' });
+    const mq = svc.createQuote(ctx(), { legId: leg.id, email: 'e@x.test' });
+    assert.deepEqual(mq.options.map((o) => o.termMonths), [3]);       // 5-month term withheld close to departure
+    assert.throws(() => svc.createQuote(ctx(), { legId: leg.id, email: 'e@x.test', termMonths: 5 }), /offers terms of 3/);
+  } finally { CONFIG.termRules = []; }
+});
+
+test('launch phase finances empty legs only; charter legs open up via config', async () => {
+  const { CONFIG } = await import('../src/config.js');
+  const { ctx, db } = setup();
+  const op = db.prepare('SELECT * FROM operators').get();
+  const r = svc.createOperatorLeg(ctx(), op, { originCode: 'dal', originCity: 'Dallas', destCode: 'aus', destCity: 'Austin', aircraft: 'Citation CJ3',
+    window: 'Morning', priceCents: 2_000_000, durationMin: 55, departsAt: new Date(T0.getTime() + 3 * DAY).toISOString(), legType: 'charter' });
+  assert.equal(r.leg.financing.financeable, false);
+  assert.equal(r.leg.financing.reason, 'leg_type_not_financeable');
+  CONFIG.financeableLegTypes = ['empty_leg', 'charter'];
+  try { assert.equal(svc.createQuote(ctx(), { legId: r.leg.id }).terms.principalCents, 1_800_000); }
+  finally { CONFIG.financeableLegTypes = ['empty_leg']; }
+});
+
+test('operator upload returns the flight-specific financing offers at listing time', () => {
+  const { ctx, db } = setup();
+  const op = db.prepare('SELECT * FROM operators').get();
+  const r = svc.createOperatorLeg(ctx(), op, { originCode: 'dal', originCity: 'Dallas', destCode: 'hou', destCity: 'Houston', aircraft: 'Citation CJ3',
+    window: 'Afternoon', priceCents: 900_000, durationMin: 50, departsAt: new Date(T0.getTime() + 2 * DAY).toISOString() });
+  const plans = r.financingOffers.map((o) => `${o.plan}:${o.termMonths}`);
+  assert.deepEqual(plans, ['non_member:3', 'access:3', 'access:5', 'elite:3', 'elite:5', 'deposit:12']);
+  assert.equal(r.financingOffers[0].installments, 13);
+  assert.equal(r.operatorPayoutCents, 900_000);                      // commission defaults to 0
+  assert.throws(() => svc.createOperatorLeg(ctx(), op, { originCode: 'x' }), /required/);
+});
+
+test('broker commission: operator is paid price minus its commission', () => {
+  const { ctx, db, calls } = setup();
+  const op = { ...db.prepare('SELECT * FROM operators').get(), commission_bps: 1000 };
+  const r = svc.createOperatorLeg(ctx(), op, { originCode: 'dal', originCity: 'Dallas', destCode: 'hou', destCity: 'Houston', aircraft: 'Citation CJ3',
+    window: 'Afternoon', priceCents: 1_000_000, durationMin: 50, departsAt: new Date(T0.getTime() + 2 * DAY).toISOString() });
+  assert.equal(r.operatorPayoutCents, 900_000);
+  fundLoan(ctx, db, r.leg.id);
+  assert.equal(calls.disburse[0].amountCents, 900_000);
+  assert.equal(svc.portfolio(ctx()).marketplaceMarkupCents, 100_000); // the 10% broker margin shows up as earned margin
 });

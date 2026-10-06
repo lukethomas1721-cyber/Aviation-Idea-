@@ -51,7 +51,8 @@ export function applyToInstallment(db, loanId, seq, amountCents, now) {
 
 // Marks a funded/defaulted loan paid once every installment is covered. Returns true if it closed.
 export function closeIfPaid(db, loanId, now) {
-  const owed = db.prepare('SELECT COALESCE(SUM(amount_cents - paid_cents),0) AS v FROM installments WHERE loan_id=?').get(loanId).v;
+  const owed = db.prepare('SELECT COALESCE(SUM(amount_cents - paid_cents),0) AS v FROM installments WHERE loan_id=?').get(loanId).v
+    + db.prepare('SELECT COALESCE(SUM(amount_cents - paid_cents),0) AS v FROM loan_charges WHERE loan_id=?').get(loanId).v;
   if (owed > 0) return false;
   db.prepare("UPDATE loans SET status='paid', closed_at=? WHERE id=? AND status IN ('funded','defaulted')").run(now.toISOString(), loanId);
   log(db, now, loanId, 'paid_off', {});

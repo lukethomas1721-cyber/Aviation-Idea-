@@ -11,13 +11,15 @@ export const REASONS = {
   revenue_ratio_high: 'The financed amount is too large relative to reported annual revenue.',
   revenue_ratio_review: 'Financed amount relative to revenue requires manual review.',
   new_business: 'Limited time in business requires manual review.',
+  state_not_available: 'We are not yet lending in your state.',
   first_time_limit: 'The amount exceeds the starting limit for first-time clients and requires manual review.'
 };
 
-export function underwrite({ borrower, principalCents, existingExposureCents, priorDefaults, maxExposureCents, repaidLoans = 0, firstTimeMaxCents = Infinity }) {
+export function underwrite({ borrower, principalCents, existingExposureCents, priorDefaults, maxExposureCents, repaidLoans = 0, firstTimeMaxCents = Infinity, launchStates = null }) {
   const declines = [];
   const reviews = [];
 
+  if (launchStates && !launchStates.includes(borrower.state)) declines.push('state_not_available'); // plan: Texas clients only at launch
   if (!borrower.kyc_passed) declines.push('kyc_failed');
   if (!borrower.ofac_clear) declines.push('ofac_hit');
   if (priorDefaults > 0) declines.push('prior_default');

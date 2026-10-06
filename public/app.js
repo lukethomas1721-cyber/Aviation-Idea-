@@ -1,15 +1,11 @@
-// Demo UI. In production the licensed charter site calls the JetReserve API from its backend; the partner key below
-// is a public demo key and must never ship in a real browser bundle. Payment buttons simulate the processor webhooks.
+// Demo UI. In production the licensed charter site calls the JetReserve API from its backend (or uses the embedded
+// plug-in, see widget.js); the partner key below is a public demo key and must never ship in a real browser bundle.
+import { esc, usd, usd0, pct, dur, when, uid, scheduleTable } from './lib.js';
+import { createCheckout } from './checkout.js';
+
 const PARTNER_KEY = 'demo_partner_key';
 const $ = (s, r = document) => r.querySelector(s);
-const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const usd = (c) => '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const usd0 = (c) => '$' + Math.round(c / 100).toLocaleString('en-US');
-const pct = (x) => (x * 100).toFixed(0) + '%';
-const dur = (m) => (m >= 60 ? Math.floor(m / 60) + 'h ' : '') + (m % 60 ? (m % 60) + 'm' : '').trim();
-const when = (iso) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
-const REASON = { per_seat_or_member_flight: 'Per-seat / members-only', leg_held: 'Offer pending', leg_locked: 'Booking in progress', leg_booked: 'Booked', departure_too_soon: 'Departs too soon', operator_not_verified: 'Operator not verified' };
-const uid = () => crypto.randomUUID();
+const REASON = { per_seat_or_member_flight: 'Per-seat / members-only', leg_held: 'Offer pending', leg_locked: 'Booking in progress', leg_booked: 'Booked', departure_too_soon: 'Departs too soon', operator_not_verified: 'Operator not verified', leg_type_not_financeable: 'Not yet financeable' };
 
 async function api(path, { method = 'GET', body, admin } = {}) {
   const r = await fetch('/api/v1' + path, {
@@ -36,6 +32,21 @@ document.querySelectorAll('#tabs button').forEach((b) => (b.onclick = () => {
 
 // ---- marketplace
 let LEGS = [], ME = '';
+const checkout = createCheckout({
+  email: () => ME,
+  ui: { modal, close: closeModal, toast, changed: () => loadLegs() },
+  client: {
+    quote: ({ legId, termMonths, entityType }) => post('/quotes', { legId, email: ME || undefined, termMonths, entityType }),
+    apply: ({ legId, termMonths, borrower }) => post('/applications', { legId, termMonths, borrower, consents: { creditCheck: true } }),
+    getLoan: (id) => api('/loans/' + id),
+    accept: (id, body) => post(`/loans/${id}/accept`, body),
+    cancel: (id) => post(`/loans/${id}/cancel`),
+    createGroup: (id, friends) => post(`/loans/${id}/group`, { friends }),
+    finalize: (id, mode) => post(`/loans/${id}/group/finalize`, { mode }),
+    simulateJoin: (token) => post(`/group/join/${token}`, { idVerified: true, autopay: { method: 'card', last4: '5555' } }),
+    pay: (id, body) => post(`/loans/${id}/payments`, { ...body, idempotencyKey: uid() })
+  }
+});
 $('#meBtn').onclick = () => { ME = $('#meEmail').value.trim().toLowerCase(); loadLegs(); };
 async function loadLegs() {
   try { LEGS = (await api('/legs' + (ME ? '?email=' + encodeURIComponent(ME) : ''))).legs; renderLegs(); }
@@ -58,161 +69,9 @@ function renderLegs() {
         : `<div><span class="badge">${esc(REASON[f.reason] || 'Not financeable')}</span></div><button class="ghost" disabled>Financing unavailable</button>`}
     </div>`;
   }).join('') || '<p class="muted">No flights match.</p>';
-  document.querySelectorAll('[data-leg]').forEach((b) => (b.onclick = () => openCheckout(LEGS.find((l) => l.id === b.dataset.leg))));
+  document.querySelectorAll('[data-leg]').forEach((b) => (b.onclick = () => checkout.open(LEGS.find((l) => l.id === b.dataset.leg))));
 }
 $('#routeFilter').oninput = renderLegs; $('#finOnly').onchange = renderLegs;
-
-const PROFILES = {
-  strong: { label: 'Strong (approve)', income: 300000, years: 0, score: 750, type: 'individual' },
-  business: { label: 'Established LLC (approve)', income: 5000000, years: 8, score: 740, type: 'llc' },
-  borderline: { label: 'Borderline credit (manual review)', income: 300000, years: 0, score: 640, type: 'individual' },
-  weak: { label: 'Weak credit (decline)', income: 300000, years: 0, score: 540, type: 'individual' }
-};
-
-function scheduleTable(s) {
-  const show = s.length > 6 ? [...s.slice(0, 3), null, ...s.slice(-1)] : s;
-  return `<table><thead><tr><th>#</th><th>Due</th><th class="n">Amount</th></tr></thead><tbody>${
-    show.map((x) => x ? `<tr><td>${x.seq}</td><td>${esc(x.dueDate)}${x.paidCents >= x.amountCents ? ' ✓' : ''}</td><td class="n">${usd(x.amountCents)}</td></tr>` : `<tr><td colspan="3" class="muted">… ${s.length - 4} more weekly payments …</td></tr>`).join('')}</tbody></table>`;
-}
-const termsBlock = (t, c) => `
-  <table><tbody>
-    <tr><td>Trip price</td><td class="n">${usd(t.charterPriceCents)}</td></tr>
-    ${t.downPaymentCents ? `<tr><td>Down payment (${t.cashDownCents !== t.downPaymentCents ? 'before credit' : 'due at signing'})</td><td class="n">${usd(t.downPaymentCents)}</td></tr>` : ''}
-    ${t.creditAppliedCents ? `<tr><td>Member trip credit applied</td><td class="n">−${usd(t.creditAppliedCents)}</td></tr>` : ''}
-    <tr><td>Amount financed</td><td class="n">${usd(t.principalCents)}</td></tr>
-    <tr><td>Flat charge (${(t.flatBps / 100).toFixed(0)}%)</td><td class="n">${usd(t.feeCents)}</td></tr>
-    <tr><td><b>${t.installments} weekly payments of</b></td><td class="n"><b>${usd(t.weeklyPaymentCents)}</b></td></tr>
-    <tr><td>Total repaid after down payment</td><td class="n">${usd(t.totalRepaymentCents)}</td></tr>
-    <tr><td>Estimated APR</td><td class="n">${pct(t.apr)}</td></tr>
-  </tbody></table>${c?.exceedsReferenceCap ? `<div class="callout warn fine">Pricing review flag: this APR is above the ${pct(c.referenceAprCap)} reference cap for consumer loans. Requires attorney sign-off before launch${c.enforced ? ' (enforced: loan would be refused)' : ''}.</div>` : ''}`;
-
-// ---- checkout: quote -> apply
-async function openCheckout(leg) {
-  modal('<p class="muted">Loading quote…</p>');
-  let termMonths;
-  const form = () => $('#appForm');
-  async function renderQuote() {
-    const type = form()?.entityType.value ?? 'individual';
-    const q = await post('/quotes', { legId: leg.id, email: ME || undefined, termMonths, entityType: type });
-    termMonths = q.terms.termMonths;
-    $('#termsArea').innerHTML = `
-      <div class="opts">${q.options.map((o) => `<label class="opt ${o.termMonths === termMonths ? 'sel' : ''}"><input type="radio" name="term" value="${o.termMonths}" ${o.termMonths === termMonths ? 'checked' : ''}>${o.termMonths} months · ${usd0(o.weeklyPaymentCents)}/wk</label>`).join('')}</div>
-      <p class="sub">Plan: <b>${esc(q.terms.plan.name)}</b>${q.member?.member ? ` · trip credit ${usd(q.member.tripCreditCents)}` : ''}</p>
-      ${termsBlock(q.terms, q.compliance)}<h3>Payment schedule (first payment charged at signing)</h3>${scheduleTable(q.terms.schedule)}
-      <p class="fine">${esc(q.disclosure)}</p>`;
-    document.querySelectorAll('[name=term]').forEach((r) => (r.onchange = () => { termMonths = Number(r.value); renderQuote().catch((e) => toast(e.message)); }));
-  }
-  try {
-    modal(`<h2>${esc(leg.origin.code)} → ${esc(leg.destination.code)}</h2>
-      <p class="muted">${esc(leg.aircraft)} · ${when(leg.departsAt)} · ${esc(leg.window)}</p>
-      <div id="termsArea"><p class="muted">Loading…</p></div>
-      <h3>Your details</h3>
-      <form id="appForm" class="form">
-        <label class="full">Demo profile<select id="profile">${Object.entries(PROFILES).map(([k, p]) => `<option value="${k}">${esc(p.label)}</option>`).join('')}</select></label>
-        <label class="full">Legal name<input name="legalName" required value="Pat Flyer"></label>
-        <label>Email<input name="email" type="email" required value="${esc(ME || 'pat@example.com')}"></label>
-        <label>Client type<select name="entityType"><option value="individual">Individual</option><option value="llc">LLC</option><option value="corporation">Corporation</option><option value="partnership">Partnership</option><option value="sole_proprietor">Sole proprietor</option></select></label>
-        <label>Annual income / revenue (USD)<input name="rev" type="number" min="0" required></label>
-        <label>Years in business<input name="years" type="number" min="0" step="0.5" required></label>
-        <label>Credit score (demo input)<input name="score" type="number" min="300" max="850" required></label>
-        <label class="chk full"><input type="checkbox" name="consent" required> I authorize JetReserve to verify my ID and obtain credit reports to evaluate this request.</label>
-        <div class="full actions"><button class="primary" id="applyBtn">See my decision</button></div>
-      </form>`);
-    const f = form();
-    const fill = () => { const p = PROFILES[$('#profile').value]; f.rev.value = p.income; f.years.value = p.years; f.score.value = p.score; f.entityType.value = p.type; renderQuote().catch((e) => toast(e.message)); };
-    $('#profile').onchange = fill; f.entityType.onchange = () => renderQuote().catch((e) => toast(e.message));
-    await renderQuote(); fill();
-    f.onsubmit = async (e) => {
-      e.preventDefault(); $('#applyBtn').disabled = true;
-      try {
-        const loan = await post('/applications', { legId: leg.id, termMonths, consents: { creditCheck: true }, borrower: {
-          legalName: f.legalName.value, email: f.email.value, entityType: f.entityType.value,
-          annualRevenueCents: Math.round(Number(f.rev.value) * 100), yearsInBusiness: Number(f.years.value), creditScore: Number(f.score.value) } });
-        showLoan(loan);
-      } catch (err) { toast(err.message); $('#applyBtn').disabled = false; }
-    };
-  } catch (e) { modal(`<p class="callout bad">${esc(e.message)}</p>`); }
-}
-
-// ---- one view per loan status
-async function refresh(id) { return api('/loans/' + id); }
-const act = (id, fn) => async (e) => { try { showLoan(await fn(e)); } catch (err) { toast(err.message); } finally { loadLegs(); } };
-
-function showLoan(loan) {
-  const reasons = loan.decisionReasons.map((r) => `<li>${esc(r.message)}</li>`).join('');
-  const L = loan.id;
-  if (loan.status === 'declined') return modal(`<h2>We can't offer financing for this trip</h2><div class="callout bad"><ul>${reasons}</ul></div><p class="fine">You may request the credit report source used. You can still book this trip with another form of payment.</p>`);
-  if (loan.status === 'pending_review') return modal(`<h2>Under review</h2><div class="callout warn"><ul>${reasons}</ul></div><p>The flight is held while an underwriter reviews your request. Check <b>My Financing</b> for the outcome.</p>`);
-  if (['expired', 'cancelled'].includes(loan.status)) return modal(`<h2>Offer ${esc(loan.status)}</h2><p class="muted">Any payments collected have been refunded.</p>`);
-  if (loan.status === 'approved') return approvedView(loan);
-  if (loan.status === 'signed') return signedView(loan);
-  modal(`<h2>Flight booked 🎉</h2><div class="callout ok">The operator has been paid ${usd(loan.terms.operatorPayoutCents)} in full. Your trip is locked.</div>
-    <p>${loan.terms.installments} weekly payments of ${usd(loan.schedule[0].amountCents)}; next is due ${esc((loan.schedule.find((s) => s.paidCents < s.amountCents) || {}).dueDate || '—')}.</p>
-    ${scheduleTable(loan.schedule)}<p class="fine">Reference: ${esc(L)}</p>`);
-}
-
-function approvedView(loan) {
-  const g = loan.group;
-  modal(`<h2>You're approved ✓</h2><div class="callout ok">${esc(loan.plan.name)} plan · risk tier ${esc(loan.riskTier)} · offer held until ${new Date(loan.expiresAt).toLocaleTimeString()}</div>
-    ${termsBlock(loan.terms)}
-    <h3>Group pay <span class="muted">(optional · up to 8 friends)</span></h3>
-    ${g ? groupPanel(loan) : `<p class="fine">Split the down payment and every weekly payment equally. You sign the loan and stay responsible for the full balance; if a friend's payment fails after a short grace period it is charged to your card.</p>
-      <textarea id="friends" placeholder="One friend per line:  Name, email@example.com"></textarea><div class="actions"><button class="ghost" id="mkGroup">Invite friends</button></div>`}
-    <h3>Sign &amp; set up autopay</h3>
-    <form id="signForm" class="form">
-      <label class="full">Type your full name to sign<input name="sig" required minlength="2"></label>
-      <label>Autopay method<select name="method"><option value="ach">Bank account (ACH)</option><option value="card">Card</option></select></label>
-      <label>Last 4 digits<input name="last4" required pattern="\\d{4}" maxlength="4" value="4242"></label>
-      <label>Backup card, last 4<input name="backup" required pattern="\\d{4}" maxlength="4" value="1111"></label>
-      <label class="chk full"><input type="checkbox" name="agree" required> I agree to repay ${usd(loan.terms.totalRepaymentCents)} by weekly autopay${loan.terms.cashDownCents ? ` after a ${usd(loan.terms.cashDownCents)} down payment` : ''} and accept the loan terms.</label>
-      <div class="full actions"><button class="primary" ${g && !g.finalized ? 'disabled title="Finalize the group first"' : ''}>Sign &amp; lock this flight</button><button type="button" class="ghost" id="cancelOffer">Cancel</button></div>
-    </form>`);
-  $('#cancelOffer').onclick = async () => { try { await post(`/loans/${loan.id}/cancel`); } catch {} closeModal(); loadLegs(); };
-  if (!g) $('#mkGroup').onclick = act(loan.id, async () => {
-    const friends = $('#friends').value.split('\n').map((l) => l.split(',').map((x) => x.trim())).filter((p) => p[0]).map(([name, email]) => ({ name, email }));
-    await post(`/loans/${loan.id}/group`, { friends }); return refresh(loan.id);
-  });
-  else wireGroup(loan);
-  $('#signForm').onsubmit = act(loan.id, async (e) => { e.preventDefault(); const f = e.target;
-    return post(`/loans/${loan.id}/accept`, { acceptedTerms: true, signatureName: f.sig.value, autopay: { method: f.method.value, last4: f.last4.value }, backupCardLast4: f.backup.value }); });
-}
-
-function groupPanel(loan) {
-  const g = loan.group;
-  return `<table><thead><tr><th>Person</th><th>Status</th><th class="n">Down</th><th class="n">Weekly</th><th></th></tr></thead><tbody>${g.members.map((m) => `<tr>
-    <td>${esc(m.name)}${m.role === 'main' ? ' <span class="badge">you</span>' : ''}</td><td>${esc(m.status)}</td>
-    <td class="n">${m.downShareCents != null ? usd(m.downShareCents) : '—'}</td><td class="n">${m.weeklyShareCents != null ? usd(m.weeklyShareCents) : '—'}</td>
-    <td>${m.inviteToken ? `<button type="button" class="ghost btn-sm" data-invite="${esc(m.inviteToken)}">Simulate join</button>` : ''}</td></tr>`).join('')}</tbody></table>
-    ${g.finalized ? `<p class="fine">Group locked: ${g.payers} people pay.</p>` : `<p class="fine">Invite links use each friend's token (shown to your site's backend). Friends verify ID and add autopay to join. The flight stays held until the deadline.</p>
-    <div class="actions"><button type="button" class="ghost" id="finShrink">Lock group (drop anyone not joined)</button><button type="button" class="ghost" id="finCover">Lock group (I cover absent shares)</button></div>`}`;
-}
-function wireGroup(loan) {
-  document.querySelectorAll('[data-invite]').forEach((b) => (b.onclick = act(loan.id, async () => {
-    await post(`/group/join/${b.dataset.invite}`, { idVerified: true, autopay: { method: 'card', last4: '5555' } }); return refresh(loan.id); })));
-  const fin = (mode) => act(loan.id, async () => { await post(`/loans/${loan.id}/group/finalize`, { mode }); return refresh(loan.id); });
-  if ($('#finShrink')) { $('#finShrink').onclick = fin('shrink'); $('#finCover').onclick = fin('main_covers'); }
-}
-
-function signedView(loan) {
-  const g = loan.group, t = loan.terms, first = loan.schedule[0];
-  const pay = (body) => act(loan.id, async () => { await post(`/loans/${loan.id}/payments`, { ...body, idempotencyKey: uid() }); return refresh(loan.id); });
-  modal(`<h2>Flight locked — complete your payment</h2>
-    <div class="callout">The flight is held for you. JetReserve pays the operator once the down payment and first autopay clear.</div>
-    <p>Due now: <b>${usd(loan.dueAtSigningCents)}</b> ${t.cashDownCents ? `(down ${usd(t.cashDownCents)} + first weekly ${usd(first.amountCents)})` : `(first weekly payment)`}</p>
-    ${g ? `<table><thead><tr><th>Person</th><th class="n">Down</th><th class="n">First weekly</th><th></th></tr></thead><tbody>${g.members.filter((m) => m.downShareCents != null).map((m) => `<tr><td>${esc(m.name)}</td><td class="n">${usd(m.downShareCents)}</td><td class="n">${usd(m.weeklyShareCents)}</td>
-      <td>${m.downPaid ? '✓ down ' : `<button class="ghost btn-sm" data-down="${esc(m.id)}">Pay down</button> `}${m.firstPaid ? '✓ first' : `<button class="ghost btn-sm" data-first="${esc(m.id)}">Pay first</button>`}</td></tr>`).join('')}</tbody></table>`
-    : `<div class="actions">${loan.dueAtSigningCents > first.amountCents - first.paidCents ? '<button class="primary" id="payDown">Pay down payment (demo)</button>' : ''}<button class="primary" id="payFirst">Pay first autopay (demo)</button></div>`}
-    <p class="fine">Demo only: these buttons simulate the payment processor confirming each charge. Offer expires ${new Date(loan.expiresAt).toLocaleTimeString()}; unpaid bookings are released and refunded.</p>
-    <div class="actions"><button class="ghost" id="cancelOffer">Cancel &amp; refund</button></div>`);
-  $('#cancelOffer').onclick = act(loan.id, () => post(`/loans/${loan.id}/cancel`));
-  if (g) {
-    document.querySelectorAll('[data-down]').forEach((b) => (b.onclick = pay({ kind: 'down_payment', memberId: b.dataset.down })));
-    document.querySelectorAll('[data-first]').forEach((b) => (b.onclick = pay({ kind: 'installment', memberId: b.dataset.first })));
-  } else {
-    if ($('#payDown')) $('#payDown').onclick = pay({ kind: 'down_payment' });
-    $('#payFirst').onclick = pay({ kind: 'installment' });
-  }
-}
 
 // ---- membership
 const PLAN_BLURB = {
@@ -244,20 +103,45 @@ async function loadMyLoans(email) {
   try {
     const { loans } = await api('/loans?email=' + encodeURIComponent(email));
     $('#loanList').innerHTML = loans.length ? loans.map(loanCard).join('') : '<p class="muted">No financing found for that email.</p>';
+    const reload = () => loadMyLoans(email);
     document.querySelectorAll('[data-pay]').forEach((b) => (b.onclick = async () => {
-      try { await post(`/loans/${b.dataset.pay}/payments`, { idempotencyKey: uid() }); toast('Weekly payment recorded'); loadMyLoans(email); } catch (err) { toast(err.message); }
+      try { await post(`/loans/${b.dataset.pay}/payments`, { idempotencyKey: uid() }); toast('Weekly payment recorded'); reload(); } catch (err) { toast(err.message); }
     }));
-    document.querySelectorAll('[data-open]').forEach((b) => (b.onclick = async () => showLoan(await refresh(b.dataset.open))));
+    document.querySelectorAll('[data-latefee]').forEach((b) => (b.onclick = async () => {
+      try { await post(`/loans/${b.dataset.latefee}/payments`, { kind: 'late_fee', idempotencyKey: uid() }); toast('Late fee paid'); reload(); } catch (err) { toast(err.message); }
+    }));
+    document.querySelectorAll('[data-open]').forEach((b) => (b.onclick = async () => checkout.show(await api('/loans/' + b.dataset.open))));
+    document.querySelectorAll('[data-payoff]').forEach((b) => (b.onclick = () => payoffDialog(b.dataset.payoff, reload)));
   } catch (e) { toast(e.message); }
 }
-const STATUS_CLASS = { funded: 'ok', paid: 'ok', approved: 'ok', signed: 'warn', pending_review: 'warn', defaulted: 'bad', declined: 'bad', expired: '', cancelled: '' };
+async function payoffDialog(id, reload) {
+  try {
+    const q = await api(`/loans/${id}/payoff`);
+    modal(`<h2>Pay off early</h2>
+      <table><tbody>
+        <tr><td>Scheduled balance (${q.installmentsRemaining} payments)</td><td class="n">${usd(q.scheduledBalanceCents)}</td></tr>
+        ${q.rebateApplies ? `<tr><td>Refund of unearned charge</td><td class="n">−${usd(q.unearnedChargeRefundCents)}</td></tr>` : ''}
+        ${q.lateFeesCents ? `<tr><td>Late fees</td><td class="n">${usd(q.lateFeesCents)}</td></tr>` : ''}
+        <tr><td><b>Pay off today</b></td><td class="n"><b>${usd(q.payoffCents)}</b></td></tr>
+      </tbody></table>
+      <p class="fine">${q.rebateApplies ? 'The unearned portion of the flat charge is refunded when you pay off early.' : 'Business-purpose loans keep the full flat charge on early payoff.'} Quote as of ${esc(q.asOf)}.</p>
+      <div class="actions"><button class="primary" id="doPayoff">Pay ${usd(q.payoffCents)} (demo)</button><button class="ghost" id="noPayoff">Not now</button></div>`);
+    $('#noPayoff').onclick = closeModal;
+    $('#doPayoff').onclick = async () => { try { await post(`/loans/${id}/payoff`, { idempotencyKey: uid(), expectedPayoffCents: q.payoffCents }); closeModal(); toast('Paid off'); reload(); } catch (err) { toast(err.message); } };
+  } catch (err) { toast(err.message); }
+}
+const STATUS_CLASS = { funded: 'ok', paid: 'ok', approved: 'ok', signed: 'warn', pending_review: 'warn', defaulted: 'bad', declined: 'bad', charged_off: 'bad', expired: '', cancelled: '' };
 function loanCard(l) {
-  const next = ['funded', 'defaulted'].includes(l.status) ? l.schedule.find((s) => s.paidCents < s.amountCents) : null;
-  return `<div class="card" style="margin-bottom:12px"><div class="route">${esc(l.trip.route)} <span class="badge ${STATUS_CLASS[l.status] || ''}">${esc(l.status.replace('_', ' '))}</span> <span class="badge">${esc(l.plan.name)}</span></div>
+  const open = ['funded', 'defaulted'].includes(l.status);
+  const next = open ? l.schedule.find((s) => s.paidCents < s.amountCents) : null;
+  return `<div class="card" style="margin-bottom:12px"><div class="route">${esc(l.trip.route)} <span class="badge ${STATUS_CLASS[l.status] || ''}">${esc(l.status.replace('_', ' '))}</span> <span class="badge">${esc(l.plan.name)}</span>${l.collectionsStage ? ` <span class="badge bad">collections: ${esc(l.collectionsStage.replace('_', ' '))}</span>` : ''}</div>
     <div class="sub">${esc(l.borrower.legalName)} · ${esc(l.trip.aircraft)} · departs ${when(l.trip.departsAt)} · ${esc(l.id)}</div>
-    ${l.balanceCents !== null ? `<div class="price">${usd(l.balanceCents)} <span class="sub">remaining of ${usd(l.terms.totalRepaymentCents)}${l.daysPastDue ? ` · <span style="color:var(--bad)">${l.daysPastDue}d past due</span>` : ''}</span></div>` : ''}
+    ${l.balanceCents !== null ? `<div class="price">${usd(l.balanceCents)} <span class="sub">remaining of ${usd(l.terms.totalRepaymentCents)}${l.daysPastDue ? ` · <span class="bad-text">${l.daysPastDue}d past due</span>` : ''}</span></div>` : ''}
+    ${l.lateFeesDueCents ? `<div class="sub bad-text">Late fees due: ${usd(l.lateFeesDueCents)}</div>` : ''}
     <div class="scroll">${scheduleTable(l.schedule)}</div>
     <div class="actions">${next ? `<button class="primary" data-pay="${esc(l.id)}">Pay week ${next.seq} (${usd(next.amountCents - next.paidCents)})</button>` : ''}
+    ${open ? `<button class="ghost" data-payoff="${esc(l.id)}">Pay off early</button>` : ''}
+    ${l.lateFeesDueCents ? `<button class="ghost" data-latefee="${esc(l.id)}">Pay late fee</button>` : ''}
     ${['approved', 'signed'].includes(l.status) ? `<button class="ghost" data-open="${esc(l.id)}">Continue</button>` : ''}</div>
     ${next ? '<p class="fine">Demo only: records a payment without moving money. A real deployment collects via ACH/card autopay.</p>' : ''}</div>`;
 }
@@ -272,21 +156,34 @@ async function loadAdmin() {
     $('#adminBody').innerHTML = `<div class="stats">
       ${stat('Capital pool', usd0(p.capitalPoolCents))}${stat('Committed principal', usd0(p.committedPrincipalCents))}${stat('Utilization', (p.utilization * 100).toFixed(1) + '%')}
       ${stat('Originated', usd0(p.originatedCents))}${stat('Collected', usd0(p.collectedCents))}${stat('Flat-charge revenue (collected)', usd0(p.feeRevenueCollectedCents))}
-      ${stat('Marketplace markup', usd0(p.marketplaceMarkupCents))}${stat('Membership dues', usd0(p.membershipDuesCents))}${stat('Client trust account', usd0(p.trustAccountCents))}
-      ${stat('Receivable outstanding', usd0(p.outstandingReceivableCents))}${stat('Defaulted balance', usd0(p.defaultedBalanceCents))}
+      ${stat('Marketplace / broker margin', usd0(p.marketplaceMarkupCents))}${stat('Membership dues', usd0(p.membershipDuesCents))}${stat('Client trust account', usd0(p.trustAccountCents))}
+      ${stat('Receivable outstanding', usd0(p.outstandingReceivableCents))}${stat('Defaulted balance', usd0(p.defaultedBalanceCents))}${stat('Charged off', usd0(p.chargedOffCents))}
+      ${stat('Loss reserve (placeholder rate)', usd0(p.lossReserveCents))}${stat('Surety bond required', usd0(trust.suretyBondRequiredCents))}
       ${stat('Current / 1-30 / 31+ dpd', `${p.delinquency.current} / ${p.delinquency.d1_30} / ${p.delinquency.d31_plus}`)}</div>
-      <div class="actions"><button class="ghost" id="sweepBtn">Run daily sweep</button></div>
+      <div class="actions"><button class="ghost" id="sweepBtn">Run daily sweep</button><button class="ghost" id="crBtn">Credit-reporting extract (CSV)</button></div>
       <h3>Trust account reconciliation</h3>
       <form id="trustForm" class="row"><input id="bankBal" type="number" step="0.01" placeholder="Bank balance (USD) to reconcile against ${usd(trust.ledgerTotalCents)} ledger"><button>Reconcile</button></form><div id="trustOut" class="fine"></div>
+      <h3>Unit economics calculator</h3>
+      <form id="econForm" class="row"><input id="ePrice" type="number" value="40000" min="1" aria-label="Trip price USD"><select id="ePlan"><option value="non_member">Non-member</option><option value="access">Access</option><option value="elite">Elite</option><option value="deposit">Deposit</option></select><select id="eTerm"><option value="3">3 mo</option><option value="5">5 mo</option><option value="12">12 mo</option></select><button>Calculate</button></form><div id="econOut" class="fine"></div>
       <h3>Loans</h3><div class="scroll"><table><thead><tr><th>Loan</th><th>Client</th><th>Plan</th><th>Trip</th><th class="n">Financed</th><th>Tier</th><th>Status</th><th></th></tr></thead><tbody>${
         loans.map((l) => `<tr><td>${esc(l.id.slice(0, 13))}</td><td>${esc(l.borrower.legalName)}</td><td>${esc(l.plan.name)}</td><td>${esc(l.trip.route)}</td><td class="n">${usd0(l.terms.principalCents)}</td><td>${esc(l.riskTier)}</td>
-          <td><span class="badge ${STATUS_CLASS[l.status] || ''}">${esc(l.status.replace('_', ' '))}</span></td>
-          <td>${l.status === 'pending_review' ? `<button class="ghost" data-rv="approve" data-id="${esc(l.id)}">Approve</button> <button class="ghost" data-rv="decline" data-id="${esc(l.id)}">Decline</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="8" class="muted">No loans yet — book a trip on the Empty Legs tab.</td></tr>'}</tbody></table></div>`;
-    $('#sweepBtn').onclick = async () => { const r = await post('/admin/sweep', {}, ADMIN); toast(`Expired ${r.expired}, defaulted ${r.defaulted}, backstopped ${r.backstopped}`); loadAdmin(); };
+          <td><span class="badge ${STATUS_CLASS[l.status] || ''}">${esc(l.status.replace('_', ' '))}</span>${l.collectionsStage ? ` <span class="badge">${esc(l.collectionsStage.replace('_', ' '))}</span>` : ''}</td>
+          <td>${l.status === 'pending_review' ? `<button class="ghost" data-rv="approve" data-id="${esc(l.id)}">Approve</button> <button class="ghost" data-rv="decline" data-id="${esc(l.id)}">Decline</button>` : ''}
+          ${l.status === 'defaulted' ? `<button class="ghost" data-col="refer_agency" data-id="${esc(l.id)}">Refer to agency</button> <button class="ghost" data-col="write_off" data-id="${esc(l.id)}">Charge off</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="8" class="muted">No loans yet — book a trip on the Empty Legs tab.</td></tr>'}</tbody></table></div>`;
+    $('#sweepBtn').onclick = async () => { const r = await post('/admin/sweep', {}, ADMIN); toast(`Expired ${r.expired}, defaulted ${r.defaulted}, reminders ${r.reminders}, backstopped ${r.backstopped}`); loadAdmin(); };
+    $('#crBtn').onclick = async () => { const r = await api('/admin/credit-reporting', { admin: ADMIN }); const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([r.csv], { type: 'text/csv' })); a.download = 'credit-reporting.csv'; a.click(); toast(r.disclaimer); };
     $('#trustForm').onsubmit = async (e) => { e.preventDefault(); const t = await api('/admin/trust?bankBalanceCents=' + Math.round(Number($('#bankBal').value) * 100), { admin: ADMIN });
       $('#trustOut').textContent = t.reconciled ? `✓ Reconciled. ${t.clientBalances.length} client balance(s) total ${usd(t.ledgerTotalCents)}.` : `✗ Difference ${usd(t.differenceCents)} (bank − ledger).`; };
+    $('#econForm').onsubmit = async (e) => { e.preventDefault();
+      try { const x = await api(`/admin/economics?priceCents=${Math.round(Number($('#ePrice').value) * 100)}&plan=${$('#ePlan').value}&termMonths=${$('#eTerm').value}`, { admin: ADMIN });
+        $('#econOut').textContent = `Down ${usd(x.downCents)} · financed ${usd(x.financedCents)} · flat charge ${usd(x.flatChargeCents)} · weekly ${usd(x.weeklyPaymentCents)} · client pays ${usd(x.clientPaysCents)} · JetReserve earns ${usd(x.jetreserveEarnsCents)} (incl. ${usd(x.brokerMarginCents)} broker margin)`;
+      } catch (err) { $('#econOut').textContent = err.message; } };
     document.querySelectorAll('[data-rv]').forEach((b) => (b.onclick = async () => {
       try { await post(`/admin/loans/${b.dataset.id}/review`, { decision: b.dataset.rv }, ADMIN); loadAdmin(); } catch (err) { toast(err.message); }
+    }));
+    document.querySelectorAll('[data-col]').forEach((b) => (b.onclick = async () => {
+      if (b.dataset.col === 'write_off' && !confirm('Charge off this loan? This frees the capital and records the loss.')) return;
+      try { await post(`/admin/loans/${b.dataset.id}/collections`, { action: b.dataset.col }, ADMIN); loadAdmin(); } catch (err) { toast(err.message); }
     }));
   } catch (e) { $('#adminBody').innerHTML = `<p class="callout bad">${esc(e.message)}</p>`; }
 }

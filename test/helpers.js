@@ -21,7 +21,7 @@ export function setup() {
 }
 export const goodBorrower = (over = {}) => ({
   legalName: 'Acme Holdings LLC', email: 'cfo@acme.test', entityType: 'llc',
-  annualRevenueCents: 5_000_000_00, yearsInBusiness: 8, creditScore: 740, ...over
+  annualRevenueCents: 5_000_000_00, yearsInBusiness: 8, creditScore: 740, state: 'TX', ...over
 });
 export const person = (over = {}) => goodBorrower({ legalName: 'Pat Flyer', email: 'pat@example.test', entityType: 'individual', yearsInBusiness: 0, annualRevenueCents: 300_000_00, ...over });
 export const legAt = (db, priceCents) =>

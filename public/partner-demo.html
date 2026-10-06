@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skyline Charter (partner site demo)</title>
+<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/partner-demo.css">
+</head>
+<body class="partner-site">
+<header><div class="brand">Skyline <b>Charter</b></div><span class="muted">Demo of a charter company's own website using the JetReserve plug-in</span></header>
+<main>
+  <h1>Empty leg deals</h1>
+  <p class="muted">Each listing carries a one-line JetReserve snippet. The page never holds a JetReserve key: its backend mints a checkout session.</p>
+  <div id="legs" class="grid"></div>
+  <h3>Events from the plug-in</h3>
+  <pre id="log" class="mono">(none yet)</pre>
+  <details><summary>How a charter company installs it</summary>
+<pre class="mono">&lt;script src="https://YOUR-JETRESERVE-HOST/widget.js" defer&gt;&lt;/script&gt;
+&lt;div data-jetreserve-leg="LEG_ID"
+     data-session-url="/your-backend/jetreserve-session"&gt;&lt;/div&gt;
+
+// your backend, per click:
+POST /api/v1/checkout-sessions   x-api-key: &lt;secret&gt;   { "legId": "LEG_ID" }
+  -&gt; { "embedUrl": "...", "token": "jrs_...", "expiresAt": "..." }</pre></details>
+</main>
+<script src="/widget.js" defer></script>
+<script src="/partner-demo.js" type="module"></script>
+</body>
+</html>

@@ -6,6 +6,8 @@ import { seed, DEMO_PARTNER_KEY } from './seed.js';
 import { createApp } from './app.js';
 import { sweep } from './services/loans.js';
 import { mockRails } from './rails.js';
+import { mockNotifier } from './notify.js';
+import { mockPartnerLender } from './lenders.js';
 
 const dbPath = process.env.DB_PATH ?? ':memory:';
 if (dbPath !== ':memory:') mkdirSync(new URL('..', import.meta.url).pathname + 'data', { recursive: true });
@@ -22,5 +24,5 @@ createServer(app).listen(CONFIG.port, () => {
 });
 
 // Daily housekeeping (expire stale offers, flag defaults) plus a faster pass for offer holds.
-const run = () => sweep({ db, now: new Date(), rails: mockRails });
+const run = () => sweep({ db, now: new Date(), rails: mockRails, notify: mockNotifier, lenders: mockPartnerLender });
 setInterval(run, 60_000).unref();

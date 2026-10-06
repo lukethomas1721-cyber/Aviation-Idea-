@@ -2,6 +2,7 @@ import { CONFIG } from './config.js';
 import { PLANS, WEEKS } from './plans.js';
 import { apr, addDays, dateOnly, feeFor, splitEven } from './money.js';
 import { bad } from './errors.js';
+import { allowedTerms } from './termRules.js';
 
 // First installment is due (autopay-charged) at signing, then weekly.
 export function scheduleFor({ principalCents, feeCents, installments, intervalDays, startDate }) {
@@ -22,15 +23,17 @@ export function scheduleFor({ principalCents, feeCents, installments, intervalDa
  *  operatorPriceCents  what the operator is paid in full at funding
  *  creditCents         member trip credit available; counts toward the down payment first, then reduces the amount financed
  */
-export function buildTerms({ priceCents, operatorPriceCents = priceCents, plan, termMonths, creditCents = 0, partner, now, config = CONFIG }) {
+export function buildTerms({ priceCents, operatorPriceCents = priceCents, plan, termMonths, creditCents = 0, partner, now, config = CONFIG, adjust = null }) {
   if (typeof plan === 'string') plan = PLANS[plan];
   if (!plan) throw bad('unknown_plan', 'Unknown plan');
-  termMonths = termMonths ?? plan.termsMonths[0];
-  if (!plan.termsMonths.includes(termMonths)) {
-    throw bad('invalid_term', `${plan.name} offers terms of ${plan.termsMonths.join(' or ')} months`, { allowed: plan.termsMonths });
+  const terms = allowedTerms(plan, adjust);
+  termMonths = termMonths ?? terms[0];
+  if (!terms.includes(termMonths)) {
+    throw bad('invalid_term', `${plan.name} offers terms of ${terms.join(' or ')} months`, { allowed: terms });
   }
   const cap = Math.min(partner.max_loan_cents, config.maxLoanCents);
-  const downBase = Math.round((priceCents * plan.downBps) / 10000);
+  const downBps = plan.downBps > 0 ? Math.max(0, plan.downBps + (adjust?.downBpsAdd ?? 0)) : 0; // deposit holders never owe a down payment
+  const downBase = Math.round((priceCents * downBps) / 10000);
   const creditToDown = Math.min(creditCents, downBase);
   const creditToPrincipal = Math.max(0, Math.min(creditCents - creditToDown, priceCents - downBase - config.minLoanCents));
   let principal = priceCents - downBase - creditToPrincipal;
@@ -38,13 +41,14 @@ export function buildTerms({ priceCents, operatorPriceCents = priceCents, plan, 
   principal -= extraDown;
   if (principal < config.minLoanCents) throw bad('below_minimum', `Financed amount must be at least ${config.minLoanCents / 100} USD`);
 
-  const flatBps = plan.flatBps + (partner.fee_adjust_bps || 0);
+  const flatBps = Math.max(0, plan.flatBps + (partner.fee_adjust_bps || 0) + (adjust?.flatBpsAdd ?? 0));
   const fee = feeFor(principal, flatBps);
   const installments = WEEKS[termMonths];
   const schedule = scheduleFor({ principalCents: principal, feeCents: fee, installments, intervalDays: config.intervalDays, startDate: dateOnly(now) });
   return {
     plan: { id: plan.id, name: plan.name },
     termMonths,
+    termRulesApplied: adjust?.applied ?? [],
     charterPriceCents: priceCents,
     payoutCents: operatorPriceCents,
     downPaymentCents: downBase + extraDown,
@@ -63,6 +67,10 @@ export function buildTerms({ priceCents, operatorPriceCents = priceCents, plan, 
   };
 }
 
-export const DISCLOSURE =
-  'Flat financing charge on the amount financed, repaid by weekly autopay. The first payment is charged at signing. ' +
-  'The charge is fixed and is not reduced by early repayment. The APR shown is an estimate for comparison purposes.';
+const BASE_DISCLOSURE = 'Flat financing charge on the amount financed, repaid by weekly autopay. The first payment is charged at signing. The APR shown is an estimate for comparison purposes.';
+// Early repayment wording follows CONFIG.earlyPayoffRebate (Texas Ch. 342 refund of unearned charges for consumer loans).
+export function disclosure(entityType, config = CONFIG) {
+  const refunds = config.earlyPayoffRebate === 'all' || (config.earlyPayoffRebate === 'consumer' && entityType === 'individual');
+  return `${BASE_DISCLOSURE} ${refunds ? 'If you pay off early, the unearned portion of the charge is refunded.' : 'The charge is fixed and is not reduced by early repayment.'}`;
+}
+export const DISCLOSURE = disclosure('llc');

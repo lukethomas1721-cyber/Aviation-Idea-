@@ -10,5 +10,7 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
+      - key: DEMO_MODE
+        value: "1"             # enables simulated payment buttons + the sample partner site. NEVER set on a real deployment.
       - key: ADMIN_API_KEY
         generateValue: true   # lender-portal key; read it in Render's Environment tab
