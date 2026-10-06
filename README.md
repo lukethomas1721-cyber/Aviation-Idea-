@@ -14,6 +14,15 @@ UI tabs: **Empty Legs** (checkout with plan/term choice, group pay, sign, pay), 
 **My Financing**, **Lender Portal** (admin key `dev_admin_key` in dev). Payment buttons in the demo simulate processor
 confirmations; no money moves.
 
+## Deploy a public demo (free)
+
+1. Push is already on GitHub. On [render.com](https://render.com) (free account): **New → Blueprint**, pick this repo and the
+   `claude/aviation-loan-empty-leg-ux9z57` branch. `render.yaml` does the rest and gives you a public `https://….onrender.com` URL.
+2. The lender-portal key is generated for you: Render dashboard → service → **Environment → ADMIN_API_KEY**.
+3. Free-tier limits: sleeps after ~15 min idle (first load takes ~30 s) and the in-memory data resets on every restart.
+4. **Demo only.** The page ships a public demo partner key and uses mock payments and fake operators, so anyone with the URL can
+   create test loans. Do not enter real personal data.
+
 ## Money flow (the plan's safeguards, enforced in code)
 
 `quote → application/underwriting → approved → [group] → sign (flight LOCKS) → down payment + first autopay clear → operator paid in full → weekly autopay`

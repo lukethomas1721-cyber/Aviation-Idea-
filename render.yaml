@@ -1,0 +1,14 @@
+# One-click deploy on Render's free tier: Dashboard -> New -> Blueprint -> pick this repo/branch.
+services:
+  - type: web
+    name: jetreserve-demo
+    runtime: node
+    plan: free
+    buildCommand: echo "no build step"
+    startCommand: npm start
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: ADMIN_API_KEY
+        generateValue: true   # lender-portal key; read it in Render's Environment tab
