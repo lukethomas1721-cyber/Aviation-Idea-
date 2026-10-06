@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SkyFinance — Empty Leg Financing</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 20 20%27%3E%3Ctext y=%2715%27 font-size=%2715%27%3E✈%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header>
+  <div class="brand">✈ Sky<b>Finance</b></div>
+  <nav id="tabs">
+    <button data-tab="market" class="active">Empty Legs</button>
+    <button data-tab="loans">My Financing</button>
+    <button data-tab="lender">Lender Portal</button>
+  </nav>
+</header>
+<main>
+  <section id="market">
+    <div class="bar">
+      <h1>Empty Leg Flights</h1>
+      <label class="chk"><input type="checkbox" id="finOnly"> Financeable only</label>
+      <input id="routeFilter" placeholder="Filter by airport / city (e.g. LAS)">
+    </div>
+    <p class="muted">Part 135 empty legs. Up to $30,000 financed per trip — 10% flat charge, repaid in 3 monthly installments.</p>
+    <div id="legs" class="grid"></div>
+  </section>
+
+  <section id="loans" hidden>
+    <h1>My Financing</h1>
+    <form id="lookup" class="row"><input id="lookupEmail" type="email" placeholder="Business email used on application" required><button>Look up</button></form>
+    <div id="loanList"></div>
+  </section>
+
+  <section id="lender" hidden>
+    <h1>Lender Portal</h1>
+    <form id="adminForm" class="row"><input id="adminKey" type="password" placeholder="Admin key (dev default: dev_admin_key)" required><button>Sign in</button></form>
+    <div id="adminBody"></div>
+  </section>
+</main>
+
+<div id="modal" class="modal" hidden><div class="sheet"><button class="x" id="closeModal" aria-label="Close">×</button><div id="modalBody"></div></div></div>
+<div id="toast" class="toast" hidden></div>
+<script src="/app.js" type="module"></script>
+</body>
+</html>

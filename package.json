@@ -1,0 +1,12 @@
+{
+  "name": "skyfinance",
+  "version": "0.1.0",
+  "description": "Buy-now-pay-later financing for Part 135 empty-leg charters (licensable to charter marketplaces)",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/server.js",
+    "test": "node --disable-warning=ExperimentalWarning --test \"test/*.test.js\""
+  }
+}
